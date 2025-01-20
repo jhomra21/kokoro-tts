@@ -3,13 +3,25 @@
 // Configure environment before imports
 console.log('Configuring ONNX Runtime...');
 
+// iOS detection
+const isIOS = () => {
+  const platform = navigator.platform || '';
+  return /iPad|iPhone|iPod/.test(platform) || 
+         (platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
 // R2 bucket URL - replace with your actual R2 bucket URL
 const R2_BUCKET_URL = 'https://pub-c65d1a273aab4fc9aea3561a3b0e9a3e.r2.dev';
 
 // Configure ONNX paths before importing
 (globalThis as any).ONNX_RUNTIME_CONFIG = {
-  numThreads: navigator.hardwareConcurrency || 4,
-  wasmPaths: {
+  numThreads: isIOS() ? 1 : (navigator.hardwareConcurrency || 4),
+  wasmPaths: isIOS() ? {
+    // Fallback paths for iOS
+    'ort-wasm.wasm': `${R2_BUCKET_URL}/ort-wasm.wasm`,
+    'ort-wasm.jsep.wasm': `${R2_BUCKET_URL}/ort-wasm.jsep.wasm`
+  } : {
+    // SIMD paths for other platforms
     'ort-wasm-simd-threaded.wasm': `${R2_BUCKET_URL}/ort-wasm-simd-threaded.wasm`,
     'ort-wasm-simd-threaded.jsep.wasm': `${R2_BUCKET_URL}/ort-wasm-simd-threaded.jsep.wasm`
   }
@@ -20,19 +32,17 @@ import { KokoroTTS } from 'kokoro-js';
 // @ts-ignore
 import * as ort from 'onnxruntime-web'; 
 
-console.log('Imported dependencies');
-
 // Configure ONNX runtime for maximum performance
-ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-ort.env.wasm.simd = true;
+ort.env.wasm.numThreads = isIOS() ? 1 : (navigator.hardwareConcurrency || 4);
+ort.env.wasm.simd = !isIOS(); // Disable SIMD on iOS
 ort.env.wasm.proxy = false; // Disable proxy for direct execution
 
 // Enable WebAssembly optimizations
-if (crossOriginIsolated) {
+if (crossOriginIsolated && !isIOS()) {
   console.log('Cross-Origin Isolated environment detected, enabling SharedArrayBuffer');
   ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
 } else {
-  console.log('Cross-Origin Isolation not available, falling back to single thread');
+  console.log('Cross-Origin Isolation not available or iOS device detected, falling back to single thread');
   ort.env.wasm.numThreads = 1;
 }
 
@@ -40,6 +50,7 @@ console.log('ONNX Runtime configured:', {
   numThreads: ort.env.wasm.numThreads,
   simd: ort.env.wasm.simd,
   proxy: ort.env.wasm.proxy,
+  isIOS: isIOS(),
   crossOriginIsolated
 });
 
@@ -60,10 +71,9 @@ self.onmessage = async (e: MessageEvent) => {
         tts = await KokoroTTS.from_pretrained(
           "onnx-community/Kokoro-82M-ONNX",
           { 
-            dtype: "q8",
+            dtype: isIOS() ? "fp32" : "q8", // Use fp32 for iOS for better compatibility
             device: "wasm",
             progress_callback: (info: any) => {
-              console.log('Loading progress:', info);
               
               let progress = 0;
               if (typeof info === 'number') {
