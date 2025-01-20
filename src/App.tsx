@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { KokoroTTS } from 'kokoro-js'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { AudioPlayer } from './components/AudioPlayer'
 import './App.css'
 
 interface Voice {
@@ -13,20 +13,22 @@ interface AudioGeneration {
   id: string;
   text: string;
   voice: string;
+  voiceId: string;
   timestamp: number;
   audio: Float32Array;
   audioUrl?: string;
   samplingRate: number;
 }
 
-interface AudioPlayback {
+interface PlaybackState {
   context: AudioContext | null;
   source: AudioBufferSourceNode | null;
   gainNode: GainNode | null;
   startTime: number;
-  pauseTime: number;
+  offset: number;
   duration: number;
   buffer: AudioBuffer | null;
+  animationFrame: number | null;
 }
 
 interface TTSState {
@@ -43,21 +45,103 @@ interface TTSState {
   playbackProgress: number;
   currentTime: string;
   duration: string;
+  generationProgress: number;
 }
+
+// Define voices array outside component to avoid recreating it
+const AVAILABLE_VOICES: Voice[] = [
+  { id: 'af', name: 'Default', language: 'en-us', gender: 'Female' },
+  { id: 'af_bella', name: 'Bella', language: 'en-us', gender: 'Female' },
+  { id: 'af_nicole', name: 'Nicole', language: 'en-us', gender: 'Female' },
+  { id: 'af_sarah', name: 'Sarah', language: 'en-us', gender: 'Female' },
+  { id: 'af_sky', name: 'Sky', language: 'en-us', gender: 'Female' },
+  { id: 'am_adam', name: 'Adam', language: 'en-us', gender: 'Male' },
+  { id: 'am_michael', name: 'Michael', language: 'en-us', gender: 'Male' },
+  { id: 'bf_emma', name: 'Emma', language: 'en-gb', gender: 'Female' },
+  { id: 'bf_isabella', name: 'Isabella', language: 'en-gb', gender: 'Female' },
+  { id: 'bm_george', name: 'George', language: 'en-gb', gender: 'Male' },
+  { id: 'bm_lewis', name: 'Lewis', language: 'en-gb', gender: 'Male' }
+];
+
+// Add WAV encoding function
+const encodeWAV = (audioData: Float32Array, sampleRate: number): Blob => {
+  const buffer = new ArrayBuffer(44 + audioData.length * 2);
+  const view = new DataView(buffer);
+
+  // Write WAV header
+  const writeString = (view: DataView, offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  // RIFF identifier
+  writeString(view, 0, 'RIFF');
+  // File length
+  view.setUint32(4, 36 + audioData.length * 2, true);
+  // RIFF type
+  writeString(view, 8, 'WAVE');
+  // Format chunk identifier
+  writeString(view, 12, 'fmt ');
+  // Format chunk length
+  view.setUint32(16, 16, true);
+  // Sample format (1 is PCM)
+  view.setUint16(20, 1, true);
+  // Channels
+  view.setUint16(22, 1, true);
+  // Sample rate
+  view.setUint32(24, sampleRate, true);
+  // Byte rate
+  view.setUint32(28, sampleRate * 2, true);
+  // Block align
+  view.setUint16(32, 2, true);
+  // Bits per sample
+  view.setUint16(34, 16, true);
+  // Data chunk identifier
+  writeString(view, 36, 'data');
+  // Data chunk length
+  view.setUint32(40, audioData.length * 2, true);
+
+  // Write audio data
+  const volume = 0.5;
+  for (let i = 0; i < audioData.length; i++) {
+    const sample = Math.max(-1, Math.min(1, audioData[i]));
+    view.setInt16(44 + i * 2, sample * 0x7FFF * volume, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+};
+
+// Add download handler
+const handleDownload = (audio: Float32Array, samplingRate: number, text: string) => {
+  const blob = encodeWAV(audio, samplingRate);
+  const url = URL.createObjectURL(blob);
+  
+  // Create temporary link and click it
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${text.slice(0, 30).replace(/[^a-z0-9]/gi, '_')}.wav`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  
+  // Cleanup
+  URL.revokeObjectURL(url);
+};
 
 function App() {
   const [text, setText] = useState('')
-  const [tts, setTTS] = useState<any>(null)
   const [selectedVoice, setSelectedVoice] = useState('af_sky')
   const workerRef = useRef<Worker | null>(null)
-  const [playback, setPlayback] = useState<AudioPlayback>({
+  const [playback] = useState<PlaybackState>({
     context: null,
     source: null,
     gainNode: null,
     startTime: 0,
-    pauseTime: 0,
+    offset: 0,
     duration: 0,
-    buffer: null
+    buffer: null,
+    animationFrame: null
   })
   const [state, setState] = useState<TTSState>({
     isLoading: true,
@@ -65,15 +149,20 @@ function App() {
     isGenerating: false,
     error: null,
     loadingMessage: 'Initializing TTS engine...',
-    voices: [],
+    voices: AVAILABLE_VOICES,
     speed: 1.0,
     volume: 1.0,
     history: [],
     currentlyPlaying: null,
     playbackProgress: 0,
     currentTime: '0:00',
-    duration: '0:00'
+    duration: '0:00',
+    generationProgress: 0
   })
+  const [, setSeekPosition] = useState<{id: string, position: number} | null>(null)
+  const playAnimationRef = useRef<number | null>(null);
+  const [generationStartTime, setGenerationStartTime] = useState<number | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   // Load history from IndexedDB on mount
   useEffect(() => {
@@ -136,48 +225,40 @@ function App() {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
-  // Update progress bar and time display
-  useEffect(() => {
-    let animationFrame: number
-
-    const updateProgress = () => {
-      if (state.isPlaying && playback.context && playback.startTime > 0 && playback.source) {
-        const currentTime = playback.context.currentTime - playback.startTime
-        const duration = playback.duration / playback.source.playbackRate.value
-        const progress = currentTime / duration
-
+  const updateProgress = useCallback(() => {
+    if (playback.context && playback.startTime && playback.buffer) {
+      const elapsed = playback.context.currentTime - playback.startTime + playback.offset;
+      const duration = playback.buffer.duration;
+      
+      if (elapsed >= duration) {
+        // Reset playback when done
+        if (playback.source) {
+          playback.source.stop();
+          playback.source.onended = null;
+        }
+        if (playAnimationRef.current) {
+          cancelAnimationFrame(playAnimationRef.current);
+          playAnimationRef.current = null;
+        }
         setState(prev => ({ 
           ...prev, 
-          playbackProgress: Math.min(progress, 1),
-          currentTime: formatTime(currentTime),
-          duration: formatTime(duration)
-        }))
-
-        if (progress >= 1) {
-          setState(prev => ({ 
-            ...prev, 
-            isPlaying: false, 
-            currentlyPlaying: null,
-            playbackProgress: 0,
-            currentTime: '0:00'
-          }))
-          return
-        }
-
-        animationFrame = requestAnimationFrame(updateProgress)
+          isPlaying: false,
+          currentlyPlaying: null,
+          playbackProgress: 0
+        }));
+        setSeekPosition(null);
+        return;
       }
-    }
 
-    if (state.isPlaying) {
-      animationFrame = requestAnimationFrame(updateProgress)
-    }
+      const progress = Math.min(elapsed / duration, 1);
+      setState(prev => ({
+        ...prev,
+        playbackProgress: progress
+      }));
 
-    return () => {
-      if (animationFrame) {
-        cancelAnimationFrame(animationFrame)
-      }
+      playAnimationRef.current = requestAnimationFrame(updateProgress);
     }
-  }, [state.isPlaying, playback])
+  }, [playback.context, playback.startTime, playback.offset, playback.buffer, playback.source]);
 
   // Cleanup audio context when component unmounts
   useEffect(() => {
@@ -198,112 +279,188 @@ function App() {
     })
 
     workerRef.current.onmessage = async (e) => {
-      const { type, ...data } = e.data
+      try {
+        if (!e.data) {
+          console.error('Received empty message from worker');
+          return;
+        }
 
-      switch (type) {
-        case 'progress':
-          setState(prev => ({
-            ...prev,
-            loadingMessage: `Downloading model: ${Math.round(data.progress * 100)}%`
-          }))
-          break
+        const { type, data } = e.data;
+        console.debug('Worker message received:', { type, data: { ...data, audio: data?.audio ? `[Float32Array(${data.audio.length})]` : undefined } });
 
-        case 'model_loaded':
-          // Initialize voices after model is loaded
-          const voiceArray = [
-            { id: 'af', name: 'Default', language: 'en-us', gender: 'Female' },
-            { id: 'af_bella', name: 'Bella', language: 'en-us', gender: 'Female' },
-            { id: 'af_nicole', name: 'Nicole', language: 'en-us', gender: 'Female' },
-            { id: 'af_sarah', name: 'Sarah', language: 'en-us', gender: 'Female' },
-            { id: 'af_sky', name: 'Sky', language: 'en-us', gender: 'Female' },
-            { id: 'am_adam', name: 'Adam', language: 'en-us', gender: 'Male' },
-            { id: 'am_michael', name: 'Michael', language: 'en-us', gender: 'Male' },
-            { id: 'bf_emma', name: 'Emma', language: 'en-gb', gender: 'Female' },
-            { id: 'bf_isabella', name: 'Isabella', language: 'en-gb', gender: 'Female' },
-            { id: 'bm_george', name: 'George', language: 'en-gb', gender: 'Male' },
-            { id: 'bm_lewis', name: 'Lewis', language: 'en-gb', gender: 'Male' }
-          ]
+        if (!type) {
+          console.error('Received message without type from worker');
+          return;
+        }
 
-          setState(prev => ({
-            ...prev,
-            voices: voiceArray,
-            isLoading: false,
-            loadingMessage: 'Model loaded successfully!'
-          }))
-          break
-
-        case 'complete':
-          try {
-            // Create audio context and buffer
-            const audioContext = new AudioContext();
-            const buffer = audioContext.createBuffer(1, data.audio.length, data.sampling_rate);
-            buffer.copyToChannel(data.audio, 0);
-            
-            // Create audio source and connect directly
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioContext.destination);
-            source.playbackRate.value = state.speed;
-
-            const generation: AudioGeneration = {
-              id: crypto.randomUUID(),
-              text,
-              voice: selectedVoice,
-              timestamp: Date.now(),
-              audio: data.audio,
-              samplingRate: data.sampling_rate
-            }
-
+        switch (type) {
+          case 'loading':
             setState(prev => ({
               ...prev,
-              history: [generation, ...prev.history],
-              currentlyPlaying: generation.id,
-              isLoading: false,
-              isGenerating: false,
-              isPlaying: true
-            }))
+              isLoading: true,
+              loadingMessage: data.message
+            }));
+            break;
 
-            // Set up audio event listeners
-            source.addEventListener('ended', () => {
+          case 'progress':
+            try {
+              // Safely handle progress updates
+              const progress = typeof data?.progress === 'number' ? data.progress : 
+                              typeof data?.data?.progress === 'number' ? data.data.progress : 0;
+              
+              console.debug('Progress update:', { 
+                progress, 
+                generationStartTime, 
+                elapsedTime,
+                raw: data
+              });
+              
+              setState(prev => ({
+                ...prev,
+                generationProgress: progress
+              }));
+            } catch (error) {
+              console.error('Error handling progress update:', error);
+            }
+            break;
+
+          case 'model_loaded':
+            setState(prev => ({
+              ...prev,
+              isLoading: false,
+              loadingMessage: 'Model loaded successfully!'
+            }))
+            break
+
+          case 'complete':
+            try {
+              // Validate audio data
+              if (!data?.audio || !data?.sampling_rate) {
+                console.error('Invalid audio data:', { 
+                  hasAudio: !!data?.audio, 
+                  audioLength: data?.audio?.length,
+                  samplingRate: data?.sampling_rate 
+                });
+                throw new Error('Invalid audio data received from worker');
+              }
+
+              // Create audio context and buffer
+              const audioContext = new AudioContext();
+              const buffer = audioContext.createBuffer(1, data.audio.length, data.sampling_rate);
+              buffer.copyToChannel(data.audio, 0);
+              
+              // Create audio source and connect directly
+              const source = audioContext.createBufferSource();
+              source.buffer = buffer;
+              source.connect(audioContext.destination);
+              source.playbackRate.value = state.speed;
+
+              // Get voice details using the voice ID returned from worker
+              const usedVoiceId = data.usedVoice;
+              const voiceDetails = AVAILABLE_VOICES.find(v => v.id === usedVoiceId);
+              
+              if (!voiceDetails) {
+                console.warn(`Voice details not found for ID: ${usedVoiceId}`);
+              }
+
+              // Log voice verification
+              console.debug('Voice verification:', {
+                selectedVoice,
+                usedVoiceId,
+                foundVoice: voiceDetails?.name,
+                allVoices: AVAILABLE_VOICES.map(v => `${v.id}:${v.name}`).join(', ')
+              });
+
+              const generation: AudioGeneration = {
+                id: crypto.randomUUID(),
+                text,
+                voice: voiceDetails?.name || 'Unknown Voice',
+                voiceId: usedVoiceId, // Store the actual used voice ID
+                timestamp: Date.now(),
+                audio: data.audio,
+                samplingRate: data.sampling_rate
+              }
+
+              // Log the generation for debugging
+              console.debug('Creating generation:', {
+                voice: voiceDetails?.name,
+                voiceId: usedVoiceId,
+                foundVoice: !!voiceDetails,
+                generation
+              });
+
+              setState(prev => ({
+                ...prev,
+                history: [generation, ...prev.history].sort((a, b) => b.timestamp - a.timestamp),
+                currentlyPlaying: generation.id,
+                isLoading: false,
+                isGenerating: false,
+                isPlaying: true,
+                generationProgress: 0
+              }));
+
+              // Reset timer state
+              setGenerationStartTime(null);
+              setElapsedTime(0);
+
+              // Set up audio event listeners
+              source.addEventListener('ended', () => {
+                setState(prev => ({
+                  ...prev,
+                  isPlaying: false,
+                  currentlyPlaying: null,
+                  playbackProgress: 0,
+                  currentTime: '0:00'
+                }));
+              });
+
+              // Start playback
+              source.start();
+              
+              // Cleanup audio context when done
+              source.addEventListener('ended', () => {
+                audioContext.close();
+              });
+
+            } catch (err) {
+              const error = err as Error;
+              console.error('Failed to setup audio playback:', error);
               setState(prev => ({
                 ...prev,
                 isPlaying: false,
+                isGenerating: false,
                 currentlyPlaying: null,
-                playbackProgress: 0,
-                currentTime: '0:00'
+                error: `Failed to setup audio playback: ${error.message}`,
+                generationProgress: 0
               }));
-            });
+              // Reset timer on error too
+              setGenerationStartTime(null);
+              setElapsedTime(0);
+            }
+            break;
 
-            // Start playback
-            source.start();
-            
-            // Cleanup audio context when done
-            source.addEventListener('ended', () => {
-              audioContext.close();
-            });
-
-          } catch (err) {
-            const error = err as Error;
-            console.error('Failed to setup audio playback:', error);
+          case 'error':
+            console.error('TTS generation error:', data.error);
             setState(prev => ({
               ...prev,
-              isPlaying: false,
+              isLoading: false,
               isGenerating: false,
-              currentlyPlaying: null,
-              error: `Failed to setup audio playback: ${error.message}`
+              error: `Failed to generate speech: ${data.error}`,
+              generationProgress: 0
             }));
-          }
-          break;
-
-        case 'error':
-          console.error('TTS generation error:', data.error);
-          setState(prev => ({
-            ...prev,
-            isLoading: false,
-            isGenerating: false,
-            error: `Failed to generate speech: ${data.error}`
-          }));
-          break;
+            // Reset timer on error
+            setGenerationStartTime(null);
+            setElapsedTime(0);
+            break;
+        }
+      } catch (error) {
+        console.error('Error handling worker message:', error);
+        setState(prev => ({
+          ...prev,
+          isLoading: false,
+          isGenerating: false,
+          error: 'An error occurred while processing the request'
+        }));
       }
     }
 
@@ -335,190 +492,19 @@ function App() {
     })
   }
 
-  const setupAudioPlayback = async (audio: Float32Array, samplingRate: number) => {
-    try {
-      // Clean up existing playback
-      if (playback.source) {
-        playback.source.stop()
-      }
-      if (playback.context) {
-        await playback.context.close()
-      }
-
-      // Create new audio context and buffer
-      const context = new AudioContext()
-      const buffer = context.createBuffer(1, audio.length, samplingRate)
-      buffer.copyToChannel(audio, 0)
-      
-      // Create audio graph
-      const source = context.createBufferSource()
-      source.buffer = buffer
-      source.playbackRate.value = state.speed
-      
-      const gainNode = context.createGain()
-      gainNode.gain.value = state.volume
-      
-      // Connect nodes
-      source.connect(gainNode)
-      gainNode.connect(context.destination)
-      
-      setPlayback({
-        context,
-        source,
-        gainNode,
-        startTime: 0,
-        pauseTime: 0,
-        duration: buffer.duration,
-        buffer
-      })
-
-      return { source, context, gainNode }
-    } catch (error) {
-      console.error('Failed to setup audio playback:', error)
-      setState(prev => ({ 
-        ...prev, 
-        isPlaying: false,
-        currentlyPlaying: null,
-        error: 'Failed to setup audio playback'
-      }))
-      throw error
-    }
-  }
-
-  const seekAudio = (progress: number) => {
-    if (!playback.context || !playback.source || !playback.buffer) return;
-    
-    // Stop current playback
-    playback.source.stop();
-    
-    // Create new source
-    const newSource = playback.context.createBufferSource();
-    newSource.buffer = playback.buffer;
-    newSource.playbackRate.value = state.speed;
-    
-    // Connect to gain node
-    newSource.connect(playback.gainNode!);
-    
-    // Calculate new start time
-    const seekTime = progress * playback.duration;
-    
-    // Update playback state
-    setPlayback(prev => ({
-      ...prev,
-      source: newSource,
-      startTime: playback.context!.currentTime - seekTime,
-      pauseTime: seekTime
-    }));
-    
-    // Start playback from new position
-    newSource.start(0, seekTime);
-    
-    setState(prev => ({
-      ...prev,
-      isPlaying: true,
-      playbackProgress: progress
-    }));
-  }
-
-  const playAudio = (startTime: number = 0) => {
-    if (!playback.context || !playback.buffer) return;
-    
-    // Create new source
-    const source = playback.context.createBufferSource();
-    source.buffer = playback.buffer;
-    source.playbackRate.value = state.speed;
-    
-    // Connect to gain node
-    source.connect(playback.gainNode!);
-    
-    // Start playback
-    source.start(0, startTime);
-    
-    setPlayback(prev => ({
-      ...prev,
-      source,
-      startTime: playback.context!.currentTime - startTime,
-      pauseTime: startTime
-    }));
-    
-    setState(prev => ({
-      ...prev,
-      isPlaying: true
-    }));
-  }
-
-  const pauseAudio = () => {
-    if (!playback.source || !playback.context) return;
-    
-    // Calculate current position
-    const currentTime = playback.context.currentTime - playback.startTime;
-    
-    // Stop playback
-    playback.source.stop();
-    
-    setPlayback(prev => ({
-      ...prev,
-      pauseTime: currentTime
-    }));
-    
-    setState(prev => ({
-      ...prev,
-      isPlaying: false
-    }));
-  }
-
-  const playFromHistory = async (generation: AudioGeneration) => {
-    try {
-      setState(prev => ({ 
-        ...prev, 
-        isPlaying: true, 
-        currentlyPlaying: generation.id,
-        duration: formatTime(generation.audio.length / generation.samplingRate)
-      }))
-      
-      const { source, context, gainNode } = await setupAudioPlayback(generation.audio, generation.samplingRate)
-      source.start()
-      
-      setPlayback(prev => ({
-        ...prev,
-        startTime: context.currentTime,
-        pauseTime: 0
-      }))
-      
-      source.onended = () => {
-        setState(prev => ({ 
-          ...prev, 
-          isPlaying: false, 
-          currentlyPlaying: null,
-          playbackProgress: 0,
-          currentTime: '0:00'
-        }))
-      }
-      
-      console.log('Playing from history with:', {
-        speed: source.playbackRate.value,
-        volume: gainNode.gain.value
-      })
-    } catch (error) {
-      console.error('Failed to play from history:', error)
-      setState(prev => ({ 
-        ...prev, 
-        isPlaying: false,
-        currentlyPlaying: null,
-        error: 'Failed to play audio from history'
-      }))
-    }
-  }
-
   const handleSpeak = async () => {
     if (!text.trim() || !workerRef.current || state.isGenerating) return
 
     try {
+      // Start timer immediately when generation starts
+      setGenerationStartTime(Date.now());
+      
       setState(prev => ({ 
         ...prev, 
         error: null,
         isGenerating: true,
-        loadingMessage: 'Generating speech...'
+        loadingMessage: 'Generating speech...',
+        generationProgress: 0 // Reset progress
       }))
 
       workerRef.current.postMessage({
@@ -537,6 +523,9 @@ function App() {
         currentlyPlaying: null,
         error: `Failed to generate speech: ${error?.message || String(error)}`
       }))
+      // Reset timer on error
+      setGenerationStartTime(null);
+      setElapsedTime(0);
     }
   }
 
@@ -559,6 +548,81 @@ function App() {
       console.error('Failed to delete from history:', error)
     }
   }
+
+  // Cleanup function for component unmount
+  useEffect(() => {
+    return () => {
+      if (playback.source) {
+        playback.source.onended = null;
+        playback.source.stop();
+      }
+      if (playback.context) {
+        playback.context.close();
+      }
+      if (playAnimationRef.current) {
+        cancelAnimationFrame(playAnimationRef.current);
+        playAnimationRef.current = null;
+      }
+      if (workerRef.current) {
+        workerRef.current.terminate();
+      }
+    };
+  }, []);
+
+  // Update timer effect
+  useEffect(() => {
+    let timer: number;
+    
+    if (state.isGenerating && generationStartTime) {
+      console.debug('Starting timer interval', {
+        isGenerating: state.isGenerating,
+        generationStartTime,
+        currentElapsed: elapsedTime
+      });
+      
+      // Initial update
+      const initialElapsed = Math.floor((Date.now() - generationStartTime) / 1000);
+      setElapsedTime(initialElapsed);
+      
+      // Set up interval
+      timer = window.setInterval(() => {
+        const elapsed = Math.floor((Date.now() - generationStartTime) / 1000);
+        console.debug('Timer update:', { 
+          elapsed, 
+          generationStartTime,
+          isGenerating: state.isGenerating 
+        });
+        setElapsedTime(elapsed);
+      }, 1000);
+    }
+    
+    return () => {
+      if (timer) {
+        console.debug('Cleaning up timer', {
+          isGenerating: state.isGenerating,
+          hadTimer: !!timer
+        });
+        clearInterval(timer);
+      }
+    };
+  }, [state.isGenerating, generationStartTime]);
+
+  // Add cleanup effect
+  useEffect(() => {
+    if (!state.isGenerating) {
+      console.debug('Resetting generation state', {
+        generationStartTime,
+        elapsedTime,
+        progress: state.generationProgress
+      });
+      setGenerationStartTime(null);
+      setElapsedTime(0);
+      setState(prev => ({
+        ...prev,
+        generationProgress: 0
+      }));
+    }
+  }, [state.isGenerating]);
 
   return (
     <div className="container">
@@ -590,7 +654,10 @@ function App() {
             <button
               key={voice.id}
               className={`voice-button ${selectedVoice === voice.id ? 'voice-button-selected' : ''}`}
-              onClick={() => setSelectedVoice(voice.id)}
+              onClick={() => {
+                console.debug('Selecting voice:', voice);
+                setSelectedVoice(voice.id);
+              }}
               disabled={state.isLoading || state.isPlaying}
             >
               <div className="voice-name">{voice.name}</div>
@@ -653,15 +720,14 @@ function App() {
           <div className="generation-progress">
             <div className="generation-progress-bar">
               <div 
-                className="generation-progress-fill" 
-                style={{ 
-                  width: state.loadingMessage.includes('%') 
-                    ? state.loadingMessage.match(/\d+/)?.[0] + '%'
-                    : '0%'
-                }} 
+                className="generation-progress-fill"
+                style={{ width: `${state.generationProgress * 100}%` }}
               />
             </div>
-            <div className="generation-status">{state.loadingMessage}</div>
+            <div className="generation-status">
+              <span>Generating audio...</span>
+              <span className="generation-timer">{elapsedTime}s</span>
+            </div>
           </div>
         )}
 
@@ -669,77 +735,42 @@ function App() {
           <div className="history-section">
             <h2 className="history-title">History</h2>
             <div className="history-grid">
-              {state.history.map(item => (
+              {state.history.map((item) => (
                 <div key={item.id} className="history-item">
-                  <div className="history-text">{item.text}</div>
-                  <div className="history-meta">
-                    <span className="timestamp">{new Date(item.timestamp).toLocaleString()}</span>
-                    <span className="voice-badge">{state.voices.find(v => v.id === item.voice)?.name || item.voice}</span>
-                  </div>
-                  <div className="playback-controls">
-                    <div className="progress-container">
-                      <div 
-                        className="progress-bar"
-                        onClick={(e) => {
-                          if (state.currentlyPlaying === item.id) {
-                            const rect = e.currentTarget.getBoundingClientRect()
-                            const progress = (e.clientX - rect.left) / rect.width
-                            seekAudio(progress)
-                          }
-                        }}
-                      >
-                        <div 
-                          className="progress-fill"
-                          style={{ 
-                            width: state.currentlyPlaying === item.id 
-                              ? `${state.playbackProgress * 100}%` 
-                              : '0%'
-                          }}
-                        />
-                        <div className="time-markers">
-                          {[0, 0.25, 0.5, 0.75, 1].map(progress => (
-                            <div key={progress} className="time-marker">
-                              {formatTime(progress * (item.audio.length / item.samplingRate))}
-                            </div>
-                          ))}
-                        </div>
+                  <AudioPlayer
+                    audio={item.audio}
+                    samplingRate={item.samplingRate}
+                    id={item.id}
+                    onPlaybackEnd={() => {
+                      setState(prev => ({
+                        ...prev,
+                        isPlaying: false,
+                        currentlyPlaying: null,
+                        playbackProgress: 0
+                      }));
+                    }}
+                  />
+                  <div className="audio-info">
+                    <div className="text-preview">{item.text}</div>
+                    <div className="audio-metadata">
+                      <div className="metadata-item">
+                        <span className="metadata-label">VOICE:</span>
+                        <span>{item.voice}</span>
+                      </div>
+                      <div className="metadata-item">
+                        <span className="metadata-label">SR:</span>
+                        <span>{item.samplingRate}Hz</span>
+                      </div>
+                      <div className="metadata-item">
+                        <span className="metadata-label">LEN:</span>
+                        <span>{formatTime(item.audio.length / item.samplingRate)}</span>
                       </div>
                     </div>
-                    
-                    <div className="playback-info">
-                      <span>{state.currentTime}</span>
-                      <span>•</span>
-                      <span>{formatTime(item.audio.length / item.samplingRate)}</span>
-                    </div>
-
-                    <div className="controls-container">
+                    <div className="timestamp-group">
+                      <span className="timestamp">{item.timestamp}</span>
                       <div className="history-actions">
-                        <button
-                          className="history-button"
-                          onClick={() => {
-                            if (state.currentlyPlaying === item.id) {
-                              if (state.isPlaying) {
-                                pauseAudio()
-                              } else {
-                                playAudio(playback.pauseTime)
-                              }
-                            } else {
-                              playFromHistory(item)
-                            }
-                          }}
-                          disabled={state.isPlaying && state.currentlyPlaying !== item.id}
-                        >
-                          {state.currentlyPlaying === item.id 
-                            ? (state.isPlaying ? '⏸︎ PAUSE' : '▶ RESUME') 
-                            : '▶ PLAY'}
-                        </button>
-                        <button
-                          className="history-button history-button-delete"
-                          onClick={() => deleteFromHistory(item.id)}
-                          disabled={state.isPlaying && state.currentlyPlaying === item.id}
-                        >
-                          ✕ DELETE
-                        </button>
+                        <button className="delete-button" onClick={() => deleteFromHistory(item.id)}>Delete</button>
+                        <button className="download-button" onClick={() => handleDownload(item.audio, item.samplingRate, item.text)}>Download</button>
                       </div>
                     </div>
                   </div>

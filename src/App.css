@@ -448,7 +448,8 @@
 
 .history-actions {
   display: flex;
-  gap: calc(var(--grid-unit));
+  gap: 8px;
+  align-items: center;
 }
 
 .history-button {
@@ -491,8 +492,8 @@
 .generation-progress {
   margin-top: calc(var(--grid-unit) * 2);
   padding: calc(var(--grid-unit) * 2);
-  background: var(--secondary-color);
-  border: 2px solid var(--primary-color);
+  background: #fff;
+  border: 1px solid #333;
   display: flex;
   flex-direction: column;
   gap: calc(var(--grid-unit));
@@ -500,21 +501,376 @@
 
 .generation-progress-bar {
   height: 4px;
-  background: var(--background-color);
-  border: 1px solid var(--primary-color);
+  background: #fff;
+  border: 1px solid #333;
   overflow: hidden;
 }
 
 .generation-progress-fill {
   height: 100%;
-  background: var(--primary-color);
+  background: #333;
   transition: width 0.2s ease;
 }
 
 .generation-status {
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  color: #333;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.generation-timer {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+}
+
+.waveform {
+  flex: 1;
+  height: 40px;
+  background: #fff;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--primary-color);
+}
+
+.waveform-progress {
+  position: absolute;
+  height: 100%;
+  background: rgba(255, 0, 0, 0.1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.timeline-track {
+  width: 100%;
+  height: 1px;
+  background: #000;
+  position: relative;
+}
+
+.progress-dot {
+  width: 6px;
+  height: 6px;
+  background: #ff0000;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  z-index: 2;
+}
+
+.progress-dot:active {
+  cursor: grabbing;
+}
+
+.waveform:hover .progress-dot {
+  transform: translate(-50%, -50%);
+}
+
+.audio-player-container {
+  background: #fff;
+  border: 2px solid var(--primary-color);
+  border-radius: 0;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.audio-player {
+  width: 100%;
+  padding: 8px;
+  background: #fff;
+}
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.play-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #333;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.play-button:hover {
+  background: #f5f5f5;
+}
+
+.play-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.time-display {
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  color: #333;
+  letter-spacing: 1px;
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+}
+
+.waveform {
+  flex: 1;
+  height: 32px;
+  background: #fff;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.waveform-progress {
+  position: absolute;
+  height: 100%;
+  background: rgba(255, 0, 0, 0.1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.timeline-track {
+  width: 100%;
+  height: 32px;
+  background: transparent;
+  position: relative;
+  cursor: grab;
+}
+
+.timeline-track::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: #333;
+  transform: translateY(-50%);
+}
+
+.progress-dot {
+  width: 6px;
+  height: 6px;
+  background: #ff0000;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.timeline-track:active {
+  cursor: grabbing;
+}
+
+.volume-control {
+  width: 60px;
+  display: flex;
+  align-items: center;
+}
+
+.volume-control input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1px;
+  background: #333;
+  outline: none;
+  cursor: pointer;
+}
+
+.volume-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 6px;
+  height: 12px;
+  background: #333;
+  cursor: pointer;
+  border: none;
+}
+
+.volume-control input[type="range"]::-moz-range-thumb {
+  width: 6px;
+  height: 12px;
+  background: #333;
+  cursor: pointer;
+  border: none;
+}
+
+.audio-player-container {
+  background: #fff;
+  border: 1px solid #333;
+  border-radius: 0;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 480px) {
+  .volume-control {
+    display: none;
+  }
+  
+  .audio-controls {
+    gap: 4px;
+  }
+  
+  .time-display {
+    font-size: 10px;
+    min-width: 35px;
+  }
+  
+  .play-button {
+    width: 28px;
+    height: 28px;
+  }
+  
+  .play-button svg {
+    width: 14px;
+    height: 14px;
+  }
+  
+  .waveform {
+    height: 28px;
+  }
+  
+  .timeline-track {
+    height: 28px;
+  }
+}
+
+.download-button {
+  padding: 4px 8px;
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: var(--primary-color);
-  text-align: center;
-  opacity: 0.7;
+  color: #333;
+  background: #fff;
+  border: 1px solid #333;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.download-button:hover {
+  background: #f5f5f5;
+  transform: translate(-1px, -1px);
+  box-shadow: 1px 1px 0 #333;
+}
+
+.download-button:active {
+  transform: translate(0, 0);
+  box-shadow: none;
+}
+
+.audio-info {
+  padding: 12px;
+  border-top: 1px solid #333;
+  background: #fff;
+  display: grid;
+  gap: 8px;
+}
+
+.text-preview {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #333;
+  text-align: left;
+  padding: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid #333;
+}
+
+.audio-metadata {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.metadata-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.metadata-label {
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.timestamp-group {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.timestamp {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #666;
+}
+
+.history-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.delete-button,
+.download-button {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid #333;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-button {
+  color: #ff3333;
+  border-color: #ff3333;
+}
+
+.delete-button:hover {
+  background: #fff5f5;
+  transform: translate(-1px, -1px);
+  box-shadow: 1px 1px 0 #ff3333;
+}
+
+.download-button:hover {
+  background: #f5f5f5;
+  transform: translate(-1px, -1px);
+  box-shadow: 1px 1px 0 #333;
+}
+
+.delete-button:active,
+.download-button:active {
+  transform: translate(0, 0);
+  box-shadow: none;
 }

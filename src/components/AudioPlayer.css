@@ -1,0 +1,139 @@
+.audio-player {
+  width: 100%;
+  padding: 8px;
+  background: #000;
+  border: 1px solid #333;
+  border-radius: 0;
+}
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 0;
+}
+
+.play-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #333;
+  background: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+.play-button:hover {
+  background: #111;
+}
+
+.play-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.playback-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  user-select: none;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.time-display {
+  min-width: 40px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.waveform {
+  flex: 1;
+  height: 20px;
+  background: #000;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  border: 1px solid #333;
+  border-radius: 0;
+}
+
+.waveform-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: rgba(255, 0, 0, 0.1);
+  pointer-events: none;
+  z-index: 1;
+  border-radius: 0;
+}
+
+.timeline-track {
+  width: 100%;
+  height: 1px;
+  background: #333;
+  position: relative;
+  border-radius: 0;
+}
+
+.progress-dot {
+  width: 6px;
+  height: 6px;
+  background: #ff0000;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  z-index: 2;
+  border-radius: 0;
+}
+
+.progress-dot:active {
+  cursor: grabbing;
+}
+
+.volume-control {
+  width: 60px;
+  padding: 0 4px;
+}
+
+.volume-control input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1px;
+  background: #333;
+  outline: none;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.volume-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 6px;
+  height: 12px;
+  background: #fff;
+  cursor: pointer;
+  border: none;
+  border-radius: 0;
+}
+
+.volume-control input[type="range"]::-moz-range-thumb {
+  width: 6px;
+  height: 12px;
+  background: #fff;
+  cursor: pointer;
+  border: none;
+  border-radius: 0;
+} 

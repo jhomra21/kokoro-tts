@@ -1,16 +1,24 @@
+/// <reference lib="webworker" />
+
 // Configure environment before imports
 console.log('Configuring ONNX Runtime...');
 
+// R2 bucket URL - replace with your actual R2 bucket URL
+const R2_BUCKET_URL = 'https://pub-c65d1a273aab4fc9aea3561a3b0e9a3e.r2.dev';
+
+// Configure ONNX paths before importing
 (globalThis as any).ONNX_RUNTIME_CONFIG = {
   numThreads: navigator.hardwareConcurrency || 4,
   wasmPaths: {
-    'ort-wasm-simd-threaded.wasm': './ort-wasm-simd-threaded.wasm',
-    'ort-wasm-simd-threaded.jsep.wasm': './ort-wasm-simd-threaded.jsep.wasm'
+    'ort-wasm-simd-threaded.wasm': `${R2_BUCKET_URL}/ort-wasm-simd-threaded.wasm`,
+    'ort-wasm-simd-threaded.jsep.wasm': `${R2_BUCKET_URL}/ort-wasm-simd-threaded.jsep.wasm`
   }
 };
 
+// Import dependencies
 import { KokoroTTS } from 'kokoro-js';
-import * as ort from 'onnxruntime-web';
+// @ts-ignore
+import * as ort from 'onnxruntime-web'; 
 
 console.log('Imported dependencies');
 
@@ -41,6 +49,9 @@ self.onmessage = async (e: MessageEvent) => {
   const { type, text, voice, speed, volume } = e.data;
   
   try {
+    // Log incoming message for debugging
+    console.debug('Worker received message:', { type, text: text?.slice(0, 50), voice, speed, volume });
+
     // Handle initialization message
     if (type === 'init') {
       if (!tts) {
@@ -49,22 +60,35 @@ self.onmessage = async (e: MessageEvent) => {
         tts = await KokoroTTS.from_pretrained(
           "onnx-community/Kokoro-82M-ONNX",
           { 
-            dtype: "q8", // Use faster quantization
+            dtype: "q8",
             device: "wasm",
             progress_callback: (info: any) => {
               console.log('Loading progress:', info);
+              
+              let progress = 0;
               if (typeof info === 'number') {
-                postMessage({ type: 'progress', progress: info });
-              } else if (info.status === 'progress') {
-                postMessage({ type: 'progress', progress: info.progress });
+                progress = info;
+              } else if (info.status === 'progress' && typeof info.progress === 'number') {
+                progress = info.progress;
+              } else if (info.status === 'download' && info.file) {
+                // Handle download progress
+                progress = 0.5; // Show some progress during download
               }
+              
+              // Ensure progress is between 0 and 1
+              progress = Math.max(0, Math.min(1, progress));
+              
+              // Send progress update
+              postMessage({ 
+                type: 'progress', 
+                progress
+              });
             }
           }
         );
         console.timeEnd('model_load');
         
         console.log('TTS model initialized successfully');
-        // Notify main thread that model is loaded
         postMessage({ type: 'model_loaded' });
       }
       return;
@@ -73,42 +97,42 @@ self.onmessage = async (e: MessageEvent) => {
     // Handle text generation
     if (!text) return;
     
-    // Initialize model if not already done
-    if (!tts) {
-      console.log('Initializing TTS model...');
-      console.time('model_load');
-      tts = await KokoroTTS.from_pretrained(
-        "onnx-community/Kokoro-82M-ONNX",
-        { 
-          dtype: "q4", // Use faster quantization
-          device: "wasm",
-          progress_callback: (info: any) => {
-            console.log('Loading progress:', info);
-            if (typeof info === 'number') {
-              postMessage({ type: 'progress', progress: info });
-            } else if (info.status === 'progress') {
-              postMessage({ type: 'progress', progress: info.progress });
-            }
-          }
-        }
-      );
-      console.timeEnd('model_load');
-      
-      console.log('TTS model initialized successfully');
-      // Notify main thread that model is loaded
-      postMessage({ type: 'model_loaded' });
-    }
+    // Log generation request
+    console.debug('Generating audio with voice:', voice);
 
     // Generate audio
     console.time('generate');
-    const result = await tts.generate(text, { voice, speed, volume });
+    let generationProgress = 0;
+    const result = await tts.generate(text, { 
+      voice, 
+      speed, 
+      volume,
+      progress_callback: (progress: number) => {
+        // Ensure progress is between 0 and 1
+        generationProgress = Math.max(0, Math.min(1, progress));
+        postMessage({ 
+          type: 'progress', 
+          progress: generationProgress
+        });
+      }
+    });
     console.timeEnd('generate');
     
     // Send raw audio data back to main thread
-    postMessage({ 
+    console.debug('Generated audio:', { 
+      length: result.audio.length,
+      samplingRate: result.sampling_rate,
+      hasAudio: !!result.audio,
+      usedVoice: voice
+    });
+
+    self.postMessage({
       type: 'complete',
-      audio: result.audio, 
-      sampling_rate: result.sampling_rate 
+      data: {
+        audio: result.audio,
+        sampling_rate: result.sampling_rate,
+        usedVoice: voice
+      }
     }, { transfer: [result.audio.buffer] });
 
   } catch (error: any) {
