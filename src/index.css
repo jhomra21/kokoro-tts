@@ -1,0 +1,83 @@
+:root {
+  --primary-color: #000000;
+  --secondary-color: #ffffff;
+  --accent-color: #ff3e3e;
+  --background-color: #f0f0f0;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
+  --grid-unit: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-mono);
+  background-color: var(--background-color);
+  color: var(--primary-color);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: calc(var(--grid-unit) * 4);
+}
+
+.button {
+  font-family: var(--font-mono);
+  background: var(--primary-color);
+  color: var(--secondary-color);
+  border: none;
+  padding: calc(var(--grid-unit) * 2) calc(var(--grid-unit) * 4);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: background-color 0.2s;
+}
+
+.button:hover {
+  background-color: var(--accent-color);
+}
+
+.input {
+  width: 100%;
+  font-family: var(--font-mono);
+  background: var(--secondary-color);
+  border: 2px solid var(--primary-color);
+  padding: calc(var(--grid-unit) * 2);
+  margin-bottom: calc(var(--grid-unit) * 2);
+}
+
+.textarea {
+  min-height: 200px;
+  resize: vertical;
+}
+
+.select {
+  width: 100%;
+  font-family: var(--font-mono);
+  background: var(--secondary-color);
+  border: 2px solid var(--primary-color);
+  padding: calc(var(--grid-unit) * 2);
+  margin-bottom: calc(var(--grid-unit) * 2);
+  appearance: none;
+  border-radius: 0;
+}
+
+.grid {
+  display: grid;
+  gap: calc(var(--grid-unit) * 4);
+}
+
+.header {
+  font-size: 2.5rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: calc(var(--grid-unit) * 4);
+  border-bottom: 4px solid var(--primary-color);
+  padding-bottom: calc(var(--grid-unit) * 2);
+}
